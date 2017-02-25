@@ -1,0 +1,318 @@
+# -*- coding: utf-8 -*-
+from unicodedata import normalize
+import shutil
+import os
+import datetime
+from config import BaseConfig
+from flask.ext.sqlalchemy import SQLAlchemy
+from sqlalchemy import create_engine
+from form import LoginForm, SignUpForm
+from flask.ext.mail import Mail, Message
+from werkzeug import secure_filename
+from flask.ext.script import Manager
+from flask.ext.migrate import Migrate, MigrateCommand
+from collections import OrderedDict
+from flask import url_for, redirect, flash, Flask, render_template, request, \
+jsonify
+from flask.ext.login import LoginManager, login_user, \
+login_required, logout_user, current_user
+
+app = Flask(__name__)
+app.config.from_object(BaseConfig)
+db = SQLAlchemy(app)
+
+# Import database models with app context
+with app.app_context():
+    from models import *
+
+migrate = Migrate(app, db)
+manager = Manager(app)
+manager.add_command('db', MigrateCommand)
+mail = Mail(app)
+login_manager = LoginManager()
+login_manager.init_app(app)
+
+
+@app.route("/logout")
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('index'))
+
+
+@app.errorhandler(401)
+def unau(e):
+    return "Acceso no autorizado, favor de iniciar sesión.".decode('utf8'), 401
+
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(unicode(user_id))
+
+
+@app.route('/inicio/<success>')
+@login_required
+def inicio(success):
+    user = current_user
+    status = False
+    if user.status == 'Listo':
+        status = True
+    files = {'Acta': user.acta, 'Credencial': user.cred, 'Foto': user.foto}
+    files_status = {'acta': user.status_acta, 'cred': user.status_credencial,
+                    'foto': user.status_foto}
+    # return str(files2)
+    return render_template('docs.html', file_uploaded=success, datos=files,
+                           status=status, files_status=files_status)
+
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1] in BaseConfig.ALLOWED_EXTENSIONS
+
+
+@app.route('/order', methods=['POST'])
+def order():
+    engine = create_engine("sqlite:///"+os.path.
+                           abspath(os.path.dirname(__file__))+"/app.db")
+    if "criteria" in request.json:
+        with engine.connect() as connection:
+            query = engine.execute("select * from users where admin=0 order\
+            by status = '"+request.json["criteria"]+"' asc").fetchall()
+        users = {"users": [list(user) for user in query]}
+        return jsonify(users)
+    elif "nombre" in request.json:
+        with engine.connect() as connection:
+            query = engine.execute("select * from users where name LIKE '"+request.json["nombre"]+"%'").fetchall()
+        users = {"users": [list(user) for user in query]}
+        return jsonify(users)
+
+@app.route('/files', methods=['POST'])
+@login_required
+def files():
+    # si el usuario es administrador redirecciona (un admin no podra entrar a
+    # sitios de un usuario comun)
+    if request.method == 'POST':
+        if current_user.admin == 1:
+            return redirect(url_for('admin'))
+        file_uploaded = False
+        engine = create_engine("sqlite:///"+os.path.abspath(os.path.dirname(__file__))+"/app.db")
+        user = current_user
+        folder = BaseConfig.UPLOAD_FOLDER + "/" + user.email
+        # Recorro sobre los archivos subidos
+        if len(request.files.items()):
+            for key, archivo in request.files.items():
+                filename = secure_filename(archivo.filename)
+                if filename != '' and allowed_file(filename):
+                    with engine.connect() as connection:
+                        a = engine.execute("select "+key+" from users where email='"+user.email+"'")
+                        row = a.fetchone()
+                        # Si ya habia subido archivo lo reemplazara
+                        if row[key] != '':
+                            if os.path.exists(folder+"/"+row[key].split('/')[2]):
+                                os.remove(folder+"/"+row[key].split('/')[2])
+
+                    with engine.connect() as connection:
+                        engine.execute("update users set "+key+"='"+'static/'+\
+                        user.email+'/'+filename+"' where email='"+user.email+"'")
+
+                    file_path = os.path.join(folder, filename)
+                    archivo.save(file_path)
+                    file_uploaded = True
+            if file_uploaded:
+                with engine.connect() as connection:
+                    a = engine.execute("select acta, cred, foto from users where email='"+user.email+"'")
+                    row = a.fetchone()
+                if row[0] != '' and row[1] != '' and row[2] != '':
+                    query = "update users set status='Espera' where email='"+user.email+"'"
+                else:
+                    query = "update users set status='Enviando' where email='"+user.email+"'"
+
+                with engine.connect() as connection:
+                    engine.execute(query)
+
+
+    return redirect(url_for('inicio', success=file_uploaded))
+
+@app.route('/registro', methods=['POST'])
+def registro():
+    sign_form = SignUpForm(prefix="sign_form")
+    log_form = LoginForm()
+    log_inc = False
+    reg_inc = False
+    if sign_form.validate_on_submit() and request.method == 'POST':
+        if User.query.filter_by(email=sign_form.correo.data).first():
+            return "<script type=\"text/javascript\">\
+                    alert(\"El correo que introdujiste ya esta en uso. Utiliza otro correo para continuar.\");\
+                    window.location.href = '/'\
+                    </script>"
+        u = User()
+        u.name = str(normalize('NFD', sign_form.nombre.data).encode('ascii','ignore')).upper()
+        u.apellidos = str(normalize('NFD', sign_form.apellidos.data).encode('ascii','ignore')).upper() 
+        u.email = sign_form.correo.data
+        u.curp = str(sign_form.curp.data).upper()
+        u.edad = sign_form.edad.data
+        u.escuela = normalize('NFD', sign_form.escuela.data).encode('ascii', 'ignore')
+        u.ciudad = normalize('NFD', sign_form.ciudad.data).encode('ascii', 'ignore')
+        u.concursos = ", ".join(sign_form.concursos.data)
+        u.password = sign_form.password.data
+        u.admin = 0
+        u.status = 'Registrado'
+        u.fecha = datetime.datetime.now()
+        folder = BaseConfig.UPLOAD_FOLDER + "/" + u.email
+        if os.path.exists(folder):
+            shutil.rmtree(folder)
+	
+        os.mkdir(folder)
+        os.chmod(folder, 0o777)
+        db.session.add(u)
+        db.session.commit()
+        mensaje = "Has quedado registrado en el portal del concurso regional de física y matemáticas<br>Inicia sesión en el portal para empezar a subir los archivos necesarios. Una vez que hayas subido todos tus documentos el comite organizador se encargara de revisarlos y aprobarlos. En caso de que todo este correcto, recibiras un correo en el transcurso de unos días indicando que haz quedado inscrito al concurso.<br><br>Tus datos de ingreso al portal son:<br><b>Correo: </b>%s<br><b>Contraseña:</b> %s<br><b>Nombre: </b>%s<br><b>Apellidos: </b>%s<br><b>CURP: </b>%s<br><b>Edad: </b>%s<br><b>Escuela: </b>%s<br><b>Ciudad: </b>%s<br><b>Concursos: </b>%s<br><br><p align='center'>Gracias por participar.<br>Atentamente:<br>Comité Organizador</p><br><br>Dudas: adrianvo@hotmail.com".decode('utf8') % (u.email, sign_form.password.data, u.name, u.apellidos, u.curp, u.edad, u.escuela, u.ciudad, u.concursos)
+        msg = Message("[Registro] Concurso Regional de Física y Matemáticas".decode('utf8'), sender = "noreply@mat.uson.mx", recipients=[u.email], bcc=["adrianvo@hotmail.com"])
+        msg.html = mensaje
+        mail.send(msg)
+        return "<script type=\"text/javascript\">\
+                alert(\"Registro exitoso. Se han enviado tus datos al correo que proporcionaste en el registro.\");\
+                window.location.href = '/'\
+                </script>"
+    elif sign_form.validate_on_submit() == False and request.method == 'POST':
+        reg_inc = True
+    return render_template('index.html', form_login=log_form, sign_form=sign_form, reg_inc=reg_inc, log_inc=log_inc)
+
+@app.route('/admin', methods=['GET'])
+@login_required
+def admin():
+    if current_user.admin != 1:
+        return redirect(url_for('index'))
+    users = User.query.filter_by(admin=0).all()
+    return render_template('lista.html', usuarios=users, admin=1)
+
+@app.route('/datos/<estudiante>', methods=['GET'])
+@login_required
+def datos(estudiante):
+    if current_user.admin != 1:
+        return redirect(url_for('index'))
+    user = User.query.filter_by(email=estudiante).first()
+    return render_template('estudiante.html', user=user, admin=1)
+
+@app.route('/calificar/<estudiante>', methods=['post'])
+@login_required
+def calificar(estudiante):
+    if current_user.admin != 1:
+        return redirect(url_for('index'))
+    if len(request.form.items()) == 0:
+        return "<script type=\"text/javascript\">\
+                window.location.href = '/admin'\
+                </script>"
+
+    u = User.query.filter_by(email=estudiante).first()
+    revisados = []
+    rechazados = []
+    aceptados = []
+    engine = create_engine("sqlite:///"+os.path.abspath(os.path.dirname(__file__))+"/app.db")
+    folder = BaseConfig.UPLOAD_FOLDER + "/" + u.email
+
+    for item in request.form.items():
+        doc = item[0].split('_')[1]
+        revisados.append(doc.title())
+        if item[1] == "1":
+            aceptados.append(doc)
+            with engine.connect() as connection:
+                engine.execute("update users set status_"+doc+"=1 where email ='"+u.email+"'")
+        else:
+            rechazados.append(doc)
+            with engine.connect() as connection:
+                engine.execute("update users set status_"+doc+"=3 where email ='"+u.email+"'")
+                a = engine.execute("select "+doc[:4]+" from users where email='"+u.email+"'")
+                row = a.fetchone()
+                if row[0] != '':
+                    os.remove(folder+"/"+row[0].split('/')[2])
+                engine.execute("update users set "+doc[:4]+"='' where email ='"+u.email+"'")
+
+    row = engine.execute("select status_acta, status_credencial, status_foto from users where email='"+u.email+"'")
+    estados = tuple(row.fetchone())
+    # return "<script type=\"text/javascript\">\
+    #         alert(\""+str(estados)+"\");\
+    #         window.location.href = '/admin'\
+    #         </script>"
+
+    if len(revisados) != 0:
+        mensaje = "Estimado estudiante, el comité del Concurso Regional de Física y Matemáticas ha revisado tus documentos: \
+"+", ".join(revisados)+".<br>Estas fueron las observaciones:<br>Documentos aceptados: "+", ".join(aceptados)+"\
+<br>Documentos rechazados: "+", ".join(rechazados)+"<br>"
+	mensaje = mensaje.decode('utf8')
+        with engine.connect() as connection:
+            engine.execute("update users set revisor='"+current_user.email+"' where email ='"+u.email+"'")
+
+
+
+    if 0 in estados or 3 in estados:
+        with engine.connect() as connection:
+            engine.execute("update users set status='Revisado' where email ='"+u.email+"'")
+        mensaje = mensaje + "Aún tienes documentos pendientes por enviar (los documentos rechazados deben reenviarse).<br>\
+DEBES ENVIAR tus documentos para que no te quedes fuera!".decode('utf8')
+    else:
+        with engine.connect() as connection:
+            engine.execute("update users set status='Listo' where email ='"+u.email+"'")
+#            conc = engine.execute("select concursos from users where email ='"+u.email+"'").first()
+ #           iniciales = "".join(map(lambda x: x[0], conc.values()[0].split(" ", 2)))
+            folio = engine.execute("select folio from users where folio!=''").fetchall()
+            if len(folio) != 0:
+                int_folios = map(lambda x: int(x[0]), folio)
+#                string_valores = map(lambda x: x.split("-")[-1], string_folios)
+ #               int_folios = map(lambda x: int(x), string_valores)
+		mayor = reduce(lambda x,y: x if x > y else y, int_folios)
+                new_folio = ''
+                if (mayor+1) < 10:
+                    new_folio = '00'+str(mayor+1)
+                elif (mayor+1) > 9 and (mayor+1) < 100:
+                    new_folio = '0'+str(mayor+1)
+                elif (mayor+1) >= 100:
+                    new_folio = str(mayor+1)
+                engine.execute("update users set folio='"+new_folio+"' where email ='"+u.email+"'")
+            else:
+                engine.execute("update users set folio='000' where email ='"+u.email+"'")
+
+        mensaje = mensaje + "<br>Ya te encuentras INSCRITO al Concurso Regional de Física y Matemáticas.".decode('utf8')
+    
+    mensaje = mensaje + "<br><br><p align='center'>Atentamente:<br>Comité Organizador</p>".decode('utf8')
+    if (len(rechazados) == 0):
+	status_msg = "Inscripción".decode('utf8')
+    else:
+        status_msg = "Revisión".decode('utf8')
+    msg = Message("["+status_msg+"] Concurso Regional de Física y Matemáticas".decode('utf8'), sender = "noreply@mat.uson.mx", recipients=[u.email], bcc=["adrianvo@hotmail.com"])
+    msg.html = mensaje
+    mail.send(msg)
+
+    return "<script type=\"text/javascript\">\
+            alert(\"Datos revisados. El alumno recibirá un correo con las observaciones.\");\
+            window.location.href = '/admin'\
+            </script>"
+
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    if current_user.is_authenticated:
+        logout_user()
+    form_login = LoginForm(prefix="form_login")
+    sign_form = SignUpForm(prefix="sign_form")
+    if form_login.validate_on_submit() and request.method == 'POST':
+        user = User.query.filter_by(email=form_login.email.data).first()
+        if user is not None and user.verify_password(form_login.password.data):
+            if user.admin == 1:
+                login_user(user)
+                return redirect(request.args.get('next') or url_for('admin'))
+            return redirect(request.args.get('next') or url_for('index'))
+            login_user(user)
+            return redirect(request.args.get('next') or url_for('inicio', success=False))
+        # flash("Correo o contrasena invalido", category='error')
+        return "<script type=\"text/javascript\">\
+                alert(\"Correo o contraseña inválido.\");\
+                window.location.href = '/'\
+                </script>"
+    login_inc = False
+    reg_inc = False
+    if form_login.validate_on_submit() == False and request.method == 'POST':
+        login_inc = True
+    return render_template('index.html', login_inc=login_inc, reg_inc=reg_inc, form_login=form_login, sign_form=sign_form)
+
+if __name__ == '__main__':
+    manager.run()

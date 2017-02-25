@@ -1,0 +1,142 @@
+{% extends "base.html"%} {% block title %} Documentos {% endblock %} {% block head %} {{ super() }} {% endblock %} {% block content %}
+<section class="bg-primary" id="algo">
+    <div class="container">
+        <div class="row">
+
+            <div class="col-lg-8 col-lg-offset-2 text-center">
+                <h2 class="section-heading">Env&iacute;a tus documentos</h2>
+                <p>Enviar solo im&aacute;genes (formatos: png, jpg, jpeg)</p>
+                <hr class="light">
+                <form action="{{ url_for('files') }}" class="form-horizontal" method="post" enctype="multipart/form-data">
+                    <fieldset>
+
+                        <div class="form-group">
+                            <label class="col-md-4 control-label" for="textinput">Acta de nacimiento</label>
+                            <div class="col-md-6">
+                                <input id="textinput1" name="acta" type="file" placeholder="" class="form-control input-md">
+                            </div>
+                            <span id="a1"></span>
+                        </div>
+                        <div class="form-group">
+                            <label class="col-md-4 control-label" for="textinput">Credencial escolar (vigente)</label>
+                            <div class="col-md-6">
+                                <input id="textinput1" name="cred" type="file" placeholder="" class="form-control input-md">
+                            </div>
+                            <span id="a1"></span>
+                        </div>
+                        <div class="form-group">
+                            <label class="col-md-4 control-label" for="textinput">Fotograf&iacute;a personal
+                            <br><a href="#" data-toggle="modal" data-target="#myModal">Requisitos</a>
+                            </label>
+                            <div class="col-md-6">
+                                <input id="textinput1" name="foto" type="file" placeholder="" class="form-control input-md">
+                            </div>
+                            <span id="a1"></span>
+                        </div>
+
+                        <!-- Button -->
+                        <div class="form-group">
+                            <label class="col-md-4 control-label" for="singlebutton"></label>
+                            <div class="col-md-4">
+                                <button id="singlebutton" name="singlebutton" class="btn btn-primary">Enviar</button>
+                            </div>
+                        </div>
+
+                    </fieldset>
+                </form>
+
+            </div>
+            <!-- Button trigger modal -->
+            <button type="button" class="btn btn-primary btn-md" data-toggle="modal" data-target="#myModal2">
+                Mis documentos enviados
+            </button>
+        </div>
+    </div>
+    <!-- Modal -->
+<div id="myModal" class="modal fade" role="dialog">
+  <div class="modal-dialog">
+
+    <!-- Modal content-->
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title">Requisitos</h4>
+      </div>
+      <div class="modal-body">
+        <p>Fotografia a color o blanco y negro, frente y orejas destapadas,
+            sin accesorios.</p>
+            <img class="img-responsive img-thumbnail" src="../static/img/req.jpg" alt="">
+      </div>
+      <div class="modal-footer">
+        <button type="button" style="background-color:#ee4b28;" class="btn btn-default" data-dismiss="modal">Cerrar</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+</section>
+
+
+<!-- Modal -->
+<div class="modal fade" id="myModal2" tabindex="-1" role="dialog" aria-labelledby="myModalLabel" align="center">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+                <h4 class="modal-title" id="myModalLabel">Mis documentos</h4>
+            </div>
+            <div class="modal-body">
+                {% for key, value in datos.items()|sort %}
+                <tr>
+                    <td>
+                        <b>{{ key }}:</b>
+                    </td>
+                    {% if value != '' %}
+                        <td>
+                            <div class="thumbnail">
+                                <img src="../{{ value }}" alt="">
+                            </div>
+                        </td>
+                    {% else %}
+                        <p>No has subido el archivo correspondiente</p>
+                    {% endif %}
+                    <br>
+                </tr>
+                {% endfor %}
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary" data-dismiss="modal">Cerrar</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if file_uploaded == 'True' %}
+<script type="text/javascript">
+    alert("Archivo subido exitosamente.");
+</script>
+{% endif %}
+{% if status == True %}
+<script type="text/javascript">
+    $(document).ready(function() {
+        $('section').first().prepend('<div class=\"alert alert-success\">\
+          <strong>Ya estas inscrito en el concurso!</strong> Todos tus documentos enviados\
+          fueron revisados y aceptados por el comite.\
+        </div>');
+        $('#singlebutton').prop('disabled', true);
+    });
+</script>
+{% endif %}
+{% for key, value in files_status.items() %}
+    {% if value == 1 %}
+    <script type="text/javascript">
+        $(document).ready(function() {
+            $("input[name='{{key}}']").prop('disabled', true);
+            $("input[name='{{key}}']").after("Documento enviado y aceptado por el comite");
+        });
+    </script>
+    {% endif %}
+{% endfor %}
+{% endblock %}
